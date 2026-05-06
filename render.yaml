@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: ai-task-backend
+    runtime: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: MONGO_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_ORIGIN
+        sync: false
+
+  - type: worker
+    name: ai-task-worker
+    runtime: docker
+    dockerContext: ./worker
+    dockerfilePath: ./worker/Dockerfile
+    plan: free
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: QUEUE_NAME
+        value: ai_tasks
+
+  - type: web
+    name: ai-task-frontend
+    runtime: docker
+    dockerContext: ./frontend
+    dockerfilePath: ./frontend/Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: VITE_API_URL
+        sync: false
