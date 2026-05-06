@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from bson import ObjectId
 from pymongo import MongoClient
 from pymongo import ReturnDocument
+from pymongo.errors import PyMongoError
 from redis import Redis
 
 load_dotenv()
@@ -34,7 +35,7 @@ def stop(_signum, _frame):
 
 
 def append_log(message):
-    return {"message": message, "timestamp": utcnow()}
+    return {"message": message, "timestamp": utcnow().isoformat()}
 
 
 def process(operation, input_text):
@@ -71,12 +72,64 @@ def start_health_server():
     return server
 
 
+def redis_task_key(task_id):
+    return f"task:{task_id}"
+
+
+def process_redis_task(redis, task_id):
+    raw = redis.get(redis_task_key(task_id))
+    if not raw:
+        print(f"Redis task {task_id} was missing", flush=True)
+        return
+
+    task = json.loads(raw)
+    if task.get("status") != "pending":
+        print(f"Redis task {task_id} was already claimed", flush=True)
+        return
+
+    now = utcnow().isoformat()
+    task["status"] = "running"
+    task["startedAt"] = now
+    task["updatedAt"] = now
+    task.setdefault("logs", []).append(append_log("Worker picked up task"))
+    redis.set(redis_task_key(task_id), json.dumps(task))
+
+    try:
+        result = process(task["operation"], task["inputText"])
+        now = utcnow().isoformat()
+        task["status"] = "success"
+        task["result"] = result
+        task["error"] = None
+        task["finishedAt"] = now
+        task["updatedAt"] = now
+        task["logs"].append(append_log("Task completed successfully"))
+        print(f"Redis task {task_id} completed", flush=True)
+    except Exception as exc:
+        now = utcnow().isoformat()
+        task["status"] = "failed"
+        task["error"] = str(exc)
+        task["finishedAt"] = now
+        task["updatedAt"] = now
+        task["logs"].append(append_log(f"Task failed: {exc}"))
+        print(f"Redis task {task_id} failed: {exc}", flush=True)
+
+    redis.set(redis_task_key(task_id), json.dumps(task))
+
+
+def mongo_is_available(mongo):
+    try:
+        mongo.admin.command("ping")
+        return True
+    except PyMongoError:
+        return False
+
+
 def main():
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     health_server = start_health_server()
 
-    mongo = MongoClient(MONGO_URI)
+    mongo = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
     db = mongo.get_default_database()
     tasks = db.tasks
     redis = Redis.from_url(REDIS_URL, decode_responses=True)
@@ -91,6 +144,10 @@ def main():
             _, payload = item
             job = json.loads(payload)
             task_id = job["taskId"]
+
+            if "-" in task_id or not mongo_is_available(mongo):
+                process_redis_task(redis, task_id)
+                continue
 
             task = tasks.find_one_and_update(
                 {"_id": task_id_to_object_id(task_id), "status": "pending"},

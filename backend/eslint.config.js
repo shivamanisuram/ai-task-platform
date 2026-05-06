@@ -8,11 +8,12 @@ export default [
       sourceType: "module",
       globals: {
         console: "readonly",
-        process: "readonly"
+        process: "readonly",
+        setTimeout: "readonly"
       }
     },
     rules: {
-      "no-unused-vars": ["error", { "argsIgnorePattern": "^_" }]
+      "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "caughtErrorsIgnorePattern": "^_" }]
     }
   }
 ];
